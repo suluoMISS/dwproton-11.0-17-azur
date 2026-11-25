@@ -103,6 +103,9 @@ scripts/build.sh /path/to/wine-src /path/to/build-dir /path/to/out
 
 ## 安装（Proton / dwproton 兼容工具）
 
+预编译二进制见 [Releases](https://github.com/suluoMISS/dwproton-11.0-17-azur/releases/latest)
+（`win32u.so` + `winex11.so` + `SHA256SUMS`，附补丁与脚本的 tar.gz）。
+
 ```sh
 scripts/install.sh /path/to/compatibilitytools.d/dwproton-11.0-17
 ```
