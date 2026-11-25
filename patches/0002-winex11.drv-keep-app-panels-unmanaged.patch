@@ -1,0 +1,53 @@
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+index 0fb39f1..7addaa4 100644
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -459,6 +459,27 @@ static BOOL thickframe_managed( DWORD style )
+ }
+ 
+ 
++/* Game UI panels (e.g. Azur Promilia's SDK windows) are layered tool popups that the
++ * application later re-parents onto its Unity window.  win32u turns that SetParent into an
++ * ownership change so that the ARGB X11 window keeps existing, but such a window must stay
++ * unmanaged: if the window manager handled it, it would apply the window hints and put the
++ * window back to its initial 640x480 geometry, clipping the panel the application renders
++ * for the full screen. */
++static BOOL is_app_owned_panel( HWND hwnd, DWORD style, DWORD ex_style )
++{
++    WCHAR buffer[64];
++    UNICODE_STRING name = { .Buffer = buffer, .MaximumLength = sizeof(buffer) };
++    HWND owner;
++
++    if (!(style & WS_POPUP)) return FALSE;
++    if ((ex_style & (WS_EX_LAYERED | WS_EX_TOOLWINDOW)) != (WS_EX_LAYERED | WS_EX_TOOLWINDOW)) return FALSE;
++    if (!(owner = (HWND)NtUserGetWindowLongPtrW( hwnd, GWLP_HWNDPARENT ))) return FALSE;
++    if (owner == hwnd) return FALSE;
++    if (!NtUserGetClassName( owner, FALSE, &name )) return FALSE;
++    return !wcscmp( buffer, u"UnityWndClass" );
++}
++
++
+ /***********************************************************************
+  *		is_window_managed
+  *
+@@ -3719,7 +3740,19 @@ void X11DRV_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UIN
+     struct window_rects old_rects;
+     BOOL is_managed, was_fullscreen, activate = !(swp_flags & SWP_NOACTIVATE), fullscreen = !!(swp_flags & WINE_SWP_FULLSCREEN);
+ 
+-    if ((is_managed = is_window_managed( hwnd, swp_flags, fullscreen ))) make_owner_managed( hwnd );
++    if ((is_managed = is_window_managed( hwnd, swp_flags, fullscreen )))
++    {
++        /* application owned SDK panels (layered tool popups owned by the game window) must stay
++         * unmanaged: they are created as 640x480 popups, the application then moves them over the
++         * whole game window, and if the window manager takes them over it applies the creation
++         * geometry (centred 640x480) to them, clipping the panel content */
++        if (is_app_owned_panel( hwnd, new_style, NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) ))
++        {
++            TRACE( "keeping app owned panel %p/%lx unmanaged\n", hwnd, 0 );
++            is_managed = FALSE;
++        }
++        else make_owner_managed( hwnd );
++    }
+     set_surface_window_rects( surface, new_rects );
+ 
+     if (!(data = get_win_data( hwnd ))) return;

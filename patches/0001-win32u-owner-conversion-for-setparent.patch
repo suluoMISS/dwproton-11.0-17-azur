@@ -1,0 +1,72 @@
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+index e02e484..f9ed6dd 100644
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -89,6 +89,7 @@ typedef struct tagWND
+ #define WIN_CHILDREN_MOVED        0x0040 /* children may have moved, ignore stored positions */
+ #define WIN_HAS_IME_WIN           0x0080 /* the window has been registered with imm32 */
+ #define WIN_IS_TOUCH              0x0100 /* the window has been registered for touch input */
++#define WIN_KEEP_OWNER            0x0200 /* keep owner when caller clears GWLP_HWNDPARENT */
+ 
+ #define WND_OTHER_PROCESS ((WND *)1)  /* returned by get_win_ptr on unknown window handles */
+ #define WND_DESKTOP       ((WND *)2)  /* returned by get_win_ptr on the desktop window */
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+index 3ebf543..a2de08b 100644
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -572,6 +572,15 @@ HWND get_parent( HWND hwnd )
+     return retval;
+ }
+ 
++static HWND set_window_owner( HWND hwnd, HWND owner );
++
++static BOOL is_unity_wnd_class( HWND hwnd )
++{
++    WCHAR name[32];
++    UNICODE_STRING us = { 0, sizeof(name), name };
++    return NtUserGetClassName( hwnd, TRUE, &us ) && !wcscmp( us.Buffer, u"UnityWndClass" );
++}
++
+ /*****************************************************************
+  *           NtUserSetParent (win32u.@)
+  */
+@@ -620,6 +629,26 @@ HWND WINAPI NtUserSetParent( HWND hwnd, HWND parent )
+         return 0;
+     }
+ 
++    if (parent != get_desktop_window() && parent != get_hwnd_message_parent())
++    {
++        win = get_win_ptr( full_handle );
++        if (win && win != WND_OTHER_PROCESS && win != WND_DESKTOP)
++        {
++            BOOL convert = (win->parent == get_desktop_window() &&
++                            (win->dwExStyle & (WS_EX_LAYERED | WS_EX_TOOLWINDOW)) &&
++                            is_unity_wnd_class( parent ));
++            if (convert) win->flags |= WIN_KEEP_OWNER;
++            release_win_ptr( win );
++            if (convert)
++            {
++                WARN( "Converting SetParent(%p, %p) for layered/tool window on UnityWndClass to owner.\n",
++                      full_handle, parent );
++                set_window_owner( full_handle, parent );
++                return get_desktop_window();
++            }
++        }
++    }
++
+     /* Windows hides the window first, then shows it again
+      * including the WM_SHOWWINDOW messages and all */
+     was_visible = NtUserShowWindow( hwnd, SW_HIDE );
+@@ -1475,6 +1504,12 @@ LONG_PTR set_window_long( HWND hwnd, INT offset, UINT size, LONG_PTR newval, BOO
+     case GWLP_HWNDPARENT:
+         if (win->parent == get_desktop_window())
+         {
++            if (!newval && (win->flags & WIN_KEEP_OWNER) && win->owner)
++            {
++                HWND owner = win->owner;
++                release_win_ptr( win );
++                return (ULONG_PTR)owner;
++            }
+             release_win_ptr( win );
+             return (ULONG_PTR)set_window_owner( hwnd, (HWND)newval );
+         }

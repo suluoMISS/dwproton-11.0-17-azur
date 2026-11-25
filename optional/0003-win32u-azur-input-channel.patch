@@ -1,0 +1,84 @@
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+index 138b553..1504bcc 100644
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -25,6 +25,7 @@
+ #endif
+ 
+ #include <assert.h>
++#include <unistd.h>
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+ #include "winternl.h"
+@@ -3611,6 +3612,63 @@ BOOL WINAPI NtUserWaitMessage(void)
+     return NtUserMsgWaitForMultipleObjectsEx( 0, NULL, INFINITE, QS_ALLINPUT, 0 ) != WAIT_FAILED;
+ }
+ 
++/***********************************************************************
++ *           azur_poll_input_channel
++ *
++ * temporary debug channel: read commands from /tmp/azur_input.txt and inject
++ * them through the wine input queue (independent of the X11 side).
++ * commands: "move X Y", "click X Y", "text STRING"
++ */
++static void azur_poll_input_channel(void)
++{
++    static int enabled = -1;
++    static BOOL busy;
++    static unsigned int counter;
++    FILE *file;
++    char line[256];
++
++    if (enabled == -1) enabled = !!getenv( "AZUR_INPUT_CHANNEL" );
++    if (!enabled || busy || (++counter & 0x0f)) return;
++    if (!(file = fopen( "/tmp/azur_input.txt", "r" ))) return;
++    busy = TRUE;
++    while (fgets( line, sizeof(line), file ))
++    {
++        int x, y;
++        INPUT input;
++        char *p;
++
++        if (sscanf( line, "move %d %d", &x, &y ) == 2) NtUserSetCursorPos( x, y );
++        else if (sscanf( line, "click %d %d", &x, &y ) == 2)
++        {
++            NtUserSetCursorPos( x, y );
++            memset( &input, 0, sizeof(input) );
++            input.type = INPUT_MOUSE;
++            input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
++            NtUserSendInput( 1, &input, sizeof(input) );
++            input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
++            NtUserSendInput( 1, &input, sizeof(input) );
++            WARN( "azur input: click %d,%d\n", x, y );
++        }
++        else if (!strncmp( line, "text ", 5 ))
++        {
++            for (p = line + 5; *p && *p != '\n'; p++)
++            {
++                memset( &input, 0, sizeof(input) );
++                input.type = INPUT_KEYBOARD;
++                input.ki.wScan = (unsigned char)*p;
++                input.ki.dwFlags = KEYEVENTF_UNICODE;
++                NtUserSendInput( 1, &input, sizeof(input) );
++                input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
++                NtUserSendInput( 1, &input, sizeof(input) );
++            }
++            WARN( "azur input: text %s\n", wine_dbgstr_a( line + 5 ) );
++        }
++    }
++    fclose( file );
++    unlink( "/tmp/azur_input.txt" );
++    busy = FALSE;
++}
++
+ /***********************************************************************
+  *           NtUserPeekMessage  (win32u.@)
+  */
+@@ -3620,6 +3678,7 @@ BOOL WINAPI NtUserPeekMessage( MSG *msg_out, HWND hwnd, UINT first, UINT last, U
+     MSG msg;
+     int ret;
+ 
++    azur_poll_input_channel();
+     user_check_not_lock();
+     check_for_driver_events();
+ 
