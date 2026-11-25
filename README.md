@@ -173,6 +173,30 @@ Unity 窗口任意尺寸 (W x H)
 - 运行：Proton 兼容工具（dwproton 11.0-17）+ DXVK 3.1.1-198 + Wayland 合成器（Smithay XWM）
 - 面板：`WS_POPUP` 640x480 → `MoveWindow(0,0,2560,1600)` → 不再被 WM 压回
 
+## 故障排查：Lutris + DXVK 下 SDK 报 `DllNotFoundException: mj_sdk/union_pcsdk.dll`
+
+如果游戏（不是启动器）黑屏、`MJLog_*.log` 里出现
+`DllNotFoundException: Unable to load DLL 'mj_sdk/union_pcsdk.dll' (WinError:0x7e)`，
+那不是本补丁的问题，而是 **DXVK 的 DLL 覆盖**与 SDK 导入项冲突：
+
+- Lutris 开启 DXVK 时会注入 `WINEDLLOVERRIDES=…,d3dcompiler_47=n,…`（native-only），
+  Wine 自带的 builtin `d3dcompiler_47.dll` 因此不可用；
+- 而 `union_pcsdk.dll` 导入的是 `D3DCOMPILER_47.dll`（**大写 + 下划线**），
+  在区分大小写的 Linux 文件系统上，`system32` 里只有小写文件时就会「找不到模块」，
+  于是整个 SDK DLL 加载失败；
+- `+loaddll` 的典型证据：
+  `err:module:import_dll Library D3DCOMPILER_47.dll (which is needed by …/mj_sdk/union_pcsdk.dll) not found`。
+
+**修法**：把一份真正的原生 `D3DCOMPILER_47.dll`（大写名）放进 prefix 的 system32。
+游戏自带的 CEF 目录里就有一份，直接复制即可（无需下载）：
+
+```bash
+cp -f "$GAMEDIR/mj_sdk/CefView/d3dcompiler_47.dll" \
+      "$WINEPREFIX/drive_c/windows/system32/D3DCOMPILER_47.dll"
+```
+
+prefix 被重建后需要重做一次；可以在 Lutris 的 `prelaunch_command` 里放一个幂等脚本自动完成。
+
 ## 说明与边界
 
 - 补丁只改 Wine 的窗口管理逻辑，**不改游戏文件**，也不注入游戏进程。
